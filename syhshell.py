@@ -15,18 +15,21 @@ import shutil
 from dataclasses import dataclass
 from utils import pyvim
 from utils import lua
+from compilers import sisyph
 
 # ─── Config ───────────────────────────────────────────────
 
 @dataclass
 class SyhConfig:
-    homedir: str = os.getcwd()
+    homedir: str = os.path.dirname(os.path.abspath(__file__))  # ← ИСПРАВЛЕНО: директория, не файл
     aliases: dict[str, str] | None = None
     homedir_replace_char: str = "~/"
+    startup_script: str = ".syhrc"  # ← Вынесено отдельно
 
     def __post_init__(self):
         if self.aliases is None:
-            self.aliases = {"cls": "clear"}
+            self.aliases = {}
+
 
 # ─── Kaa editor ──────────────────────────────────────────
 
@@ -60,16 +63,17 @@ def log(log_text, config_filename: str = 'config.json'):
             print(f'\033[1;38m[DEBUG] [{str(datetime.now()).split(".")[0]}] {log_text}\033[0m ')
 
 def log_(func):
-    def waper(*args, **kwargs):
+    def wrapper(*args, **kwargs):
         log(f"[DEBUG] Start executing function {str(func.__name__)}.")
         try:
             result = func(*args, **kwargs)
         except Exception as e:
             log(f"[ERROR] Error in executing function {str(func.__name__)} {str(type(e).__name__)}: {e}")
+            raise  # ← Не глотаем исключение, пробрасываем дальше
         finally:
             log(f"[DEBUG] End of executing function {str(func.__name__)}")
-            return result
-    return waper
+        return result
+    return wrapper
 
 # ─── Custom exception for clean exit ─────────────────────
 
@@ -139,7 +143,8 @@ class Shell:
             "kaaedit", "pyvim",
             "touch",
             "alias", "unalias",
-            "py", "tcc", "cpp",
+            "py", "tcc", "cpp", "lua", "syh",
+            "sss",  # ← Добавлено
         ]
         self.username = username
         self.hostname = hostname
@@ -234,16 +239,48 @@ class Shell:
         except Exception as e:
             print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
+    def run_sss(self, filename):
+        """Безопасное выполнение startup-скрипта."""
+        if not os.path.exists(filename):
+            return  # Отсутствие .syhrc — это нормально, не печатаем ошибку
+
+        try:
+            with open(filename, "r", encoding="utf-8") as fff:
+                lines = fff.readlines()
+        except Exception as e:
+            print(f"\033[1;31mError reading '{filename}': {e}\033[0m")
+            return
+
+        for line_num, line in enumerate(lines, 1):
+            stripped = line.strip()
+            # Пропускаем пустые строки и комментарии (Sisyph-стиль ~~)
+            if not stripped or stripped.startswith("~~") or stripped.startswith("#"):
+                continue
+            try:
+                self.execute_line(stripped)
+            except ExitShell:
+                break  # exit в .syhrc НЕ должен убивать шелл
+            except Exception as e:
+                print(f"\033[1;31m{filename}:{line_num}: {e}\033[0m")
+
     def shell_env(self):
         print('Welcome to the SisyphShell')
         print(f'Version: {info.VERSION}')
         print(f"Build: 1")
+
+        # Запуск startup-скрипта
+        startup_path = os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
+        self.run_sss(startup_path)
+
         while True:
             try:
                 stat = '#' if self.root else "$"
+                # Корректная замена homedir на ~/
+                cwd = os.getcwd()
+                display_cwd = cwd.replace(SyhConfig.homedir, SyhConfig.homedir_replace_char)
                 prompt_text = (
                     f"\033[1;32m{self.username}@{self.hostname}\033[0m:"
-                    f"\033[1;34m{os.getcwd()} \033[1;31m[{Tools.get_time()}]\033[0m {stat} "
+                    f"\033[1;34m{display_cwd} \033[1;31m[{Tools.get_time()}]\033[0m {stat} "
                 )
                 text = Tools._input(prompt_text).strip()
                 if not text:
@@ -330,6 +367,12 @@ class Shell:
                 except Exception as e:
                     print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
+        elif cmd == 'sss':
+            # Source startup script (или любой другой файл)
+            args = self._fix_slashes(args)
+            target = args[0] if args else os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
+            self.run_sss(target)
+
         elif cmd == 'ls':
             show_hidden = "-a" in args
             pure_args = [a for a in args if a != "-a"]
@@ -415,23 +458,61 @@ class Shell:
                 self._cpp_build(args[1:])
             else:
                 print("cpp: unknown subcommand; use 'run' or 'build'")
-        
+
         elif cmd == "lua":
             args = self._fix_slashes(args)
-
             if len(args) > 0:
                 runtime = lua.LuaInterpreter()
                 if os.path.isfile(args[0]):
                     with open(args[0], "r", encoding="utf-8") as ff:
                         content = ff.readlines()
                     runtime.exec_lines(content)
+                else:
+                    print(f"lua: file not found: {args[0]}")
             else:
-                print("Usage: lua [filename].lua")
+                print("Usage: lua <filename.lua>")
+
+        elif cmd == "syh":
+            args = self._fix_slashes(args)
+            if len(args) > 0:
+                try:
+                    sisyph.execute_file(args[0])
+                except Exception as e:
+                    traceback.print_exc()
+            else:
+                print("Usage: syh <filename.syh>")
+        elif cmd == "execute":
+            if not args or args[0] != "command":
+                print("Usage: execute command \"<cmd>\"")
+                return
+            
+            # Берём ВСЁ после "execute command " из исходной строки
+            prefix = "execute command "
+            idx = line.lower().find(prefix)
+            if idx == -1:
+                print("Usage: execute command \"<cmd>\"")
+                return
+            
+            rest = line[idx + len(prefix):].strip()
+            
+            # Находим первую и ПОСЛЕДНЮЮ кавычку (не rfind по shlex-результату!)
+            if rest.startswith('"') and rest.endswith('"') and len(rest) >= 2:
+                com = rest[1:-1]  # Всё между первой и последней "
+            elif rest.startswith("'") and rest.endswith("'") and len(rest) >= 2:
+                com = rest[1:-1]
+            else:
+                com = rest  # Без кавычек — берём как есть
+            
+            if com:
+                print(f"Executing: {com}")
+            else:
+                print("execute command: empty command string")
 
         else:
             matches = difflib.get_close_matches(cmd, self.commands, n=3, cutoff=0.6)
             suggestion = '\n'.join(matches) if matches else 'No suggestions.'
             print(f'\033[1;31mCommand not found: \033[0m{cmd}\n\033[1;31mDid you mean:\033[0m\n{suggestion}')
+
 
 # ─── Entry point ─────────────────────────────────────────
 
@@ -450,4 +531,3 @@ if __name__ == "__main__":
         shel.shell_env()
     finally:
         Tools.compress_to_gz("latest.log", f"{str(datetime.now()).split('.')[0]}.gz")
-
