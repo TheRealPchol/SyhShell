@@ -1,0 +1,43 @@
+GENERAL SISYPH SOURCE LICENSE
+Version 1.2, August 2026
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. DEFINITIONS
+"License" shall mean the terms and conditions for use, reproduction, and distribution as defined by Sections 1 through 8 of this document.
+"Licensor" shall mean the copyright owner or entity authorized by the copyright owner that is granting the License.
+"You" (or "Your") shall mean an individual or Legal Entity exercising permissions granted by this License.
+"Source Form" shall mean the preferred form for making modifications, including but not limited to software source code, documentation source, and configuration files.
+"Object Form" shall mean any form resulting from mechanical transformation or translation of a Source Form, including but not limited to compiled object code, generated documentation, and conversions to other media types.
+"Work" shall mean the work of authorship, whether in Source or Object Form, made available under the License.
+"Derivative Works" shall mean any work, whether in Source or Object Form, that is based on (or derived from) the Work and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship.
+"Compatible Copyleft License" shall mean any license that is recognized by the Open Source Initiative (OSI) as an open source copyleft license, including but not limited to GPL-2.0-or-later, GPL-3.0-or-later, LGPL-2.1-or-later, LGPL-3.0-or-later, MPL-2.0, AGPL-3.0-or-later, and any future OSI-approved copyleft license.
+"Compatible Inbound License" shall mean any OSI-approved open source license whose terms do not conflict with the obligations of this License, permitting the inclusion of separately licensed components within a larger Work distributed under this License.
+
+2. GRANT OF COPYRIGHT LICENSE
+Subject to the terms and conditions of this License, Licensor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute the Work and such Derivative Works in Source or Object Form.
+
+3. GRANT OF PATENT LICENSE
+Subject to the terms and conditions of this License, Licensor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the Work.
+
+4. REDISTRIBUTION AND COPYLEFT CONDITIONS
+You may reproduce and distribute copies of the Work or Derivative Works thereof in any medium, with or without modifications, provided that You meet ALL of the following conditions:
+(a) Attribution: You must give any other recipients of the Work or Derivative Works a copy of the applicable license; and
+(b) Source Code Availability: You must cause any modified files to carry prominent notices stating that You changed the files; and
+(c) Copyleft Requirement: You must distribute the Work and all Derivative Works under either (i) this exact License, or (ii) any Compatible Copyleft License of Your choice. No proprietary or non-copyleft licenses may be applied to the Work or any part thereof. The Source Form of the Work and all Derivative Works must be made available via a publicly accessible repository, direct download link, OR written offer valid for at least three years to provide the Source Form on a durable medium at no more than the cost of physical distribution; and
+(d) License Notice: When distributing under a Compatible Copyleft License pursuant to Section 4(c)(ii), You must clearly indicate in the distribution that portions of the Work were originally licensed under the General Sisyph Source License v1.2 and provide a copy of this License alongside the chosen Compatible Copyleft License for informational purposes only; the governing license for the distributed Work shall be solely the chosen Compatible Copyleft License.
+
+5. INBOUND COMPATIBILITY
+The Work may incorporate, aggregate, or combine with components received under Compatible Inbound Licenses. Such incorporated components retain their original license terms. The copyleft obligations of Section 4 apply only to the portions of the Work that are subject to this License or a Compatible Copyleft License, and do not extend to separately identifiable sections that remain governed solely by their respective Compatible Inbound Licenses, provided that the combined Work as a whole can be distributed in compliance with both this License and the inbound license terms.
+
+6. DISCLAIMER OF WARRANTY
+UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING, LICENSOR PROVIDES THE WORK (AND EACH CONTRIBUTOR PROVIDES ITS CONTRIBUTIONS) ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. YOU ARE SOLELY RESPONSIBLE FOR DETERMINING THE APPROPRIATENESS OF USING OR REDISTRIBUTING THE WORK AND ASSUME ANY RISKS ASSOCIATED WITH YOUR EXERCISE OF PERMISSIONS UNDER THIS LICENSE.
+
+7. LIMITATION OF LIABILITY
+IN NO EVENT AND UNDER NO LEGAL THEORY, WHETHER IN TORT (INCLUDING NEGLIGENCE), CONTRACT, OR OTHERWISE, UNLESS REQUIRED BY APPLICABLE LAW (SUCH AS DELIBERATE AND GROSSLY NEGLIGENT ACTS) OR AGREED TO IN WRITING, SHALL LICENSOR BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES OF ANY CHARACTER ARISING AS A RESULT OF THIS LICENSE OR OUT OF THE USE OR INABILITY TO USE THE WORK (INCLUDING BUT NOT LIMITED TO LOSS OF DATA, SYSTEM FAILURES, OR BUSINESS INTERRUPTION), EVEN IF LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+8. TRADEMARKS
+This License does not grant permission to use the trade names, trademarks, service marks, or product names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the NOTICE file.
+
+9. ACCEPTANCE
+BY EXERCISING ANY RIGHTS GRANTED HEREUNDER, YOU ACKNOWLEDGE THAT YOU HAVE READ THIS LICENSE, UNDERSTAND IT, AND AGREE TO BE BOUND BY ITS TERMS AND CONDITIONS.
