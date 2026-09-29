@@ -7,25 +7,28 @@ import shlex
 import sys
 import time
 import traceback
-from prompt_toolkit import prompt
+from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import InMemoryHistory
+
 import gzip
 import shutil
 from dataclasses import dataclass
 from utils import pyvim
 from utils import lua
 from compilers import sisyph
+import glob
+
 
 # ─── Config ───────────────────────────────────────────────
 
 @dataclass
 class SyhConfig:
-    homedir: str = os.path.dirname(os.path.abspath(__file__))  # ← ИСПРАВЛЕНО: директория, не файл
+    homedir: str = os.path.dirname(os.path.abspath(__file__))  
     aliases: dict[str, str] | None = None
     homedir_replace_char: str = "~/"
-    startup_script: str = ".syhrc"  # ← Вынесено отдельно
-
+    startup_script: str = ".syhrc"
+    
     def __post_init__(self):
         if self.aliases is None:
             self.aliases = {}
@@ -144,12 +147,60 @@ class Shell:
             "touch",
             "alias", "unalias",
             "py", "tcc", "cpp", "lua", "syh",
-            "sss",  # ← Добавлено
+            "sss",  
         ]
         self.username = username
         self.hostname = hostname
         self.root = True
+        
+        # Оставляем чистую сессию только для работы истории (Вверх/Вниз)
+        self.session = PromptSession(history=InMemoryHistory())
 
+    def shell_env(self):
+        print('Welcome to the SisyphShell')
+        print(f'Version: {info.VERSION}')
+        print(f"Build: 1")
+
+        startup_path = os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
+        self.run_sss(startup_path)
+
+        while True:
+            try:
+                stat = '#' if self.root else "$"
+                cwd = os.getcwd()
+                display_cwd = cwd.replace(SyhConfig.homedir, SyhConfig.homedir_replace_char)
+                
+                # Формируем prompt с ANSI-цветами
+                prompt_text = ANSI(
+                    f"\033[1;32m{self.username}@{self.hostname}\033[0m:"
+                    f"\033[1;34m{display_cwd} \033[1;31m[{Tools.get_time()}]\033[0m {stat} "
+                )
+                
+                # Обычный ввод без completer
+                text = self.session.prompt(prompt_text).strip()
+                
+                if not text:
+                    continue
+                self.execute_line(text)
+                
+            except ExitShell:
+                break
+            except (KeyboardInterrupt, EOFError):
+                print()
+                break
+            except Exception as e:
+                print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+    def _expand_glob(self, args: list[str]) -> list[str]:
+        expanded = []
+        for arg in args:
+            matches = glob.glob(arg)
+            if matches:
+                expanded.extend(matches)
+            else:
+                # Если маска не совпала ни с чем — оставляем как есть
+                # (чтобы rm выдал "No such file", а не молча проигнорировал)
+                expanded.append(arg)
+        return expanded
     def _fix_slashes(self, args: list[str]) -> list[str]:
         fixed_args = []
         skip = False
@@ -263,40 +314,6 @@ class Shell:
             except Exception as e:
                 print(f"\033[1;31m{filename}:{line_num}: {e}\033[0m")
 
-    def shell_env(self):
-        print('Welcome to the SisyphShell')
-        print(f'Version: {info.VERSION}')
-        print(f"Build: 1")
-
-        # Запуск startup-скрипта
-        startup_path = os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
-        self.run_sss(startup_path)
-
-        while True:
-            try:
-                stat = '#' if self.root else "$"
-                # Корректная замена homedir на ~/
-                cwd = os.getcwd()
-                display_cwd = cwd.replace(SyhConfig.homedir, SyhConfig.homedir_replace_char)
-                prompt_text = (
-                    f"\033[1;32m{self.username}@{self.hostname}\033[0m:"
-                    f"\033[1;34m{display_cwd} \033[1;31m[{Tools.get_time()}]\033[0m {stat} "
-                )
-                text = Tools._input(prompt_text).strip()
-                if not text:
-                    continue
-                self.execute_line(text)
-            except ExitShell:
-                break
-            except KeyboardInterrupt:
-                print()
-                break
-            except EOFError:
-                print()
-                break
-            except Exception as e:
-                print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
-
     def execute_line(self, line: str):
         try:
             parts = shlex.split(line)
@@ -366,9 +383,55 @@ class Shell:
                     os.chdir(args[0])
                 except Exception as e:
                     print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+                    
+        elif cmd == 'rm':
+            args = self._fix_slashes(args)
+            args = self._expand_glob(args)  # ← раскрытие маски
+            if not args:
+                print("usage: rm <file> [file2 ...]")
+            else:
+                for target in args:
+                    try:
+                        if os.path.isdir(target):
+                            print(f"rm: cannot remove '{target}': Is a directory (use rmd)")
+                        elif not os.path.exists(target):
+                            print(f"rm: cannot remove '{target}': No such file")
+                        else:
+                            os.remove(target)
+                    except PermissionError:
+                        print(f"rm: permission denied: '{target}'")
+                    except Exception as e:
+                        print(f"rm: error removing '{target}': {e}")
 
+        elif cmd == 'rmd':
+            args = self._fix_slashes(args)
+            args = self._expand_glob(args)  # ← раскрытие маски
+            if not args:
+                print("usage: rmd <directory> [dir2 ...]")
+            else:
+                for target in args:
+                    try:
+                        if not os.path.exists(target):
+                            print(f"rmd: cannot remove '{target}': No such directory")
+                        elif not os.path.isdir(target):
+                            print(f"rmd: cannot remove '{target}': Not a directory (use rm)")
+                        else:
+                            shutil.rmtree(target)
+                    except PermissionError:
+                        print(f"rmd: permission denied: '{target}'")
+                    except OSError as e:
+                        print(f"rmd: error removing '{target}': {e}")
+        elif cmd == "mkdir":
+            args = self._fix_slashes(args)
+
+            os.makedirs(args[0], exist_ok=True)
+        elif cmd == "logs":
+            args = self._fix_slashes(args)
+            if len(args) > 0:
+                if args[0] in ("clear", "clean"):
+                    print("cleaning logs")
+                    
         elif cmd == 'sss':
-            # Source startup script (или любой другой файл)
             args = self._fix_slashes(args)
             target = args[0] if args else os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
             self.run_sss(target)
@@ -420,6 +483,8 @@ class Shell:
                 try:
                     with open(args[0], 'x'):
                         pass
+                except FileExistsError:
+                    os.utime(args[0], None)
                 except Exception as e:
                     print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
@@ -481,12 +546,12 @@ class Shell:
                     traceback.print_exc()
             else:
                 print("Usage: syh <filename.syh>")
+                
         elif cmd == "execute":
             if not args or args[0] != "command":
                 print("Usage: execute command \"<cmd>\"")
                 return
             
-            # Берём ВСЁ после "execute command " из исходной строки
             prefix = "execute command "
             idx = line.lower().find(prefix)
             if idx == -1:
@@ -495,13 +560,12 @@ class Shell:
             
             rest = line[idx + len(prefix):].strip()
             
-            # Находим первую и ПОСЛЕДНЮЮ кавычку (не rfind по shlex-результату!)
             if rest.startswith('"') and rest.endswith('"') and len(rest) >= 2:
-                com = rest[1:-1]  # Всё между первой и последней "
+                com = rest[1:-1]
             elif rest.startswith("'") and rest.endswith("'") and len(rest) >= 2:
                 com = rest[1:-1]
             else:
-                com = rest  # Без кавычек — берём как есть
+                com = rest 
             
             if com:
                 print(f"Executing: {com}")

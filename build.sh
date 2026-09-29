@@ -23,6 +23,5 @@ PY="env/bin/python"
     --add-data "env/tcc-rtlib:tcc-rtlib" \
     --add-data "compilers/_cpp_run_helper.py:compilers" \
     syhshell.py
-
 echo
 echo "Готово: dist/syhshell"

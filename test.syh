@@ -1,3 +1,0 @@
-include stdlib
-
-stdlib.stdout "Hello, world!"
