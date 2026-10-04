@@ -1,0 +1,7 @@
+{
+    "atlas-network": {
+        "package-server": "127.0.0.1:54321"
+    },
+    "atlas-config": {}
+
+}

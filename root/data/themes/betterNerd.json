@@ -1,0 +1,20 @@
+{
+  "prompt_user": "\u001b[38;5;14m",
+  "prompt_host": "\u001b[38;5;14m",
+  "prompt_cwd": "\u001b[38;5;9m",
+  "prompt_time": "\u001b[38;5;13m",
+  "prompt_root": "#",
+  "prompt_user_sym": "$",
+  "prompt_reset": "\u001b[0m",
+
+  "prompt_user_bg": "\u001b[48;5;24m",
+  "prompt_cwd_bg": "\u001b[48;5;60m",
+  "prompt_time_bg": "\u001b[48;5;237m",
+
+  "success": "\u001b[38;5;14m",
+  "error": "\u001b[38;5;11m",
+  "warning": "\u001b[38;5;13m",
+  "debug": "\u001b[38;5;248m",
+  "info": "\u001b[38;5;6m",
+  "reset": "\u001b[0m"
+}

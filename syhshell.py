@@ -7,81 +7,160 @@ import shlex
 import sys
 import time
 import traceback
+import inspect
+import subprocess
+import gzip
+import shutil
+import glob
+import functools
+import importlib.util
+from dataclasses import dataclass, fields
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import InMemoryHistory
 
-import gzip
-import shutil
-from dataclasses import dataclass
 from utils import pyvim
 from utils import lua
 from compilers import sisyph
-import glob
 
 
 # ─── Config ───────────────────────────────────────────────
 
 @dataclass
 class SyhConfig:
-    homedir: str = os.path.dirname(os.path.abspath(__file__))  
+    homedir: str = os.path.dirname(os.path.abspath(__file__))
     aliases: dict[str, str] | None = None
     homedir_replace_char: str = "~/"
     startup_script: str = ".syhrc"
-    
+    ROOT: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "root")
+    ROOT_BIN: str = os.path.join(ROOT, "bin")
+    ROOT_DATA: str = os.path.join(ROOT, "data")
+
     def __post_init__(self):
         if self.aliases is None:
             self.aliases = {}
 
 
+# ─── Themes ──────────────────────────────────────────────
+
+@dataclass
+class Theme:
+    """Цветовая тема шелла. Все значения — ANSI escape-последовательности."""
+    # Prompt foreground
+    prompt_user: str = "\033[1;32m"
+    prompt_host: str = "\033[1;32m"
+    prompt_cwd: str = "\033[1;34m"
+    prompt_time: str = "\033[1;31m"
+    prompt_root: str = "#"
+    prompt_user_sym: str = "$"
+    prompt_reset: str = "\033[0m"
+
+    # Prompt background
+    prompt_bg: str = ""              # общий фон промпта
+    prompt_user_bg: str = ""         # фон секции user@host
+    prompt_cwd_bg: str = ""          # фон секции cwd
+    prompt_time_bg: str = ""         # фон секции времени
+    
+    # Global shell background
+    shell_bg: str = ""              # общий фон всего терминала
+
+    # Messages
+    success: str = "\033[1;32m"
+    error: str = "\033[1;31m"
+    warning: str = "\033[1;33m"
+    debug: str = "\033[1;38m"
+    info: str = "\033[1;37m"
+    reset: str = "\033[0m"
+
+    @classmethod
+    def default(cls) -> "Theme":
+        return cls()
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Theme":
+        valid_fields = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered)
+
+def load_theme(theme_name: str = "modern") -> Theme:
+    if theme_name == "default":
+        return Theme.default()
+    theme_path = os.path.join(SyhConfig.ROOT_DATA, "themes", f"{theme_name}.json")
+    if not os.path.isfile(theme_path):
+        log(f"Theme '{theme_name}' not found at {theme_path}, using default")
+        return Theme.default()
+    try:
+        with open(theme_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        theme = Theme.from_dict(data)
+        log(f"Loaded theme: {theme_name}")
+        return theme
+    except Exception as e:
+        log(f"Failed to load theme '{theme_name}': {e}, using default")
+        return Theme.default()
+
+
 # ─── Kaa editor ──────────────────────────────────────────
 
-def run():
+def _kaa_stub():
     print('Kaa is not installed or not supported.')
 
 try:
-    from kaa.cui.main import run
+    from kaa.cui.main import run as _kaa_run
     KAAEDIT = True
 except ImportError:
+    _kaa_run = _kaa_stub
     KAAEDIT = False
+
 
 # ─── History / aliases / info ────────────────────────────
 
 _history = InMemoryHistory()
 aliases = {"cls": "clear"}
 
+
 class info:
     VERSION = "ss26.09.1"
+
 
 # ─── Logging ─────────────────────────────────────────────
 
 def log(log_text, config_filename: str = 'config.json'):
-    if os.path.isfile(config_filename):
-        with open(config_filename, 'r') as fl:
-            config = json.load(fl)
+    config_path = os.path.join(SyhConfig.ROOT_DATA, config_filename)
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as fl:
+                config = json.load(fl)
+        except Exception:
+            config = {}
         if config.get("debug_level", 0) > 0:
             with open("latest.log", 'a+') as fi:
                 fi.write(f'\n[{str(datetime.now()).split(".")[0]}] {log_text}')
         if config.get('debug_level', 0) > 1:
             print(f'\033[1;38m[DEBUG] [{str(datetime.now()).split(".")[0]}] {log_text}\033[0m ')
 
+
 def log_(func):
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        log(f"[DEBUG] Start executing function {str(func.__name__)}.")
+        log(f"[DEBUG] Start executing function {func.__name__}.")
         try:
             result = func(*args, **kwargs)
         except Exception as e:
-            log(f"[ERROR] Error in executing function {str(func.__name__)} {str(type(e).__name__)}: {e}")
-            raise  # ← Не глотаем исключение, пробрасываем дальше
+            log(f"[ERROR] Error in executing function {func.__name__} {type(e).__name__}: {e}")
+            raise
         finally:
-            log(f"[DEBUG] End of executing function {str(func.__name__)}")
+            log(f"[DEBUG] End of executing function {func.__name__}")
         return result
     return wrapper
+
 
 # ─── Custom exception for clean exit ─────────────────────
 
 class ExitShell(Exception):
     pass
+
 
 # ─── Tools ───────────────────────────────────────────────
 
@@ -119,11 +198,30 @@ class Tools:
     @log_
     def _input(prompt_text: str) -> str:
         formatted = ANSI(prompt_text)
-        return prompt(formatted, history=_history)
+        session = PromptSession(history=_history)
+        return session.prompt(formatted)
+
+    @staticmethod
+    @log_
+    def theme_print(text: str, theme: Theme = None, style: str = ""):
+        """Выводит текст с учётом темы и стиля.
+        
+        Args:
+            text: Текст для вывода
+            theme: Объект темы (если None, используется Theme.default())
+            style: Стиль вывода ("success", "error", "warning", "info", "debug")
+        """
+        if theme is None:
+            theme = Theme.default()
+        
+        if style:
+            style_code = getattr(theme, style, "")
+            print(f"{style_code}{text}{theme.reset}")
+        else:
+            print(text)
 
     @staticmethod
     def compress_to_gz(source_file, output_file):
-        """Сжимает source_file в output_file и удаляет исходник."""
         if not os.path.exists(source_file):
             return
         try:
@@ -134,62 +232,151 @@ class Tools:
         except Exception as e:
             raise Exception(e)
 
-# ─── Shell ───────────────────────────────────────────────
+
+# ─── Shell ────────────────────────────────────────────────
 
 class Shell:
+
+    @staticmethod
+    @log_
+    def _call_function_from_file(file_path, function_name, *args, **kwargs):
+        if not os.path.exists(file_path):
+            dotted_as_path = file_path.replace(".", os.sep) + ".py"
+            candidate = os.path.join(SyhConfig.homedir, dotted_as_path)
+            if os.path.isfile(candidate):
+                file_path = candidate
+            else:
+                candidate_root = os.path.join(SyhConfig.ROOT, dotted_as_path)
+                if os.path.isfile(candidate_root):
+                    file_path = candidate_root
+                else:
+                    raise ImportError(
+                        f"Could not load file from path: {file_path} "
+                        f"(also tried: {candidate}, {candidate_root})"
+                    )
+
+        module_name = os.path.splitext(os.path.basename(file_path))[0]
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not create module spec for: {file_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        if not hasattr(module, function_name):
+            raise AttributeError(f"Function '{function_name}' not found in {file_path}")
+
+        target_function = getattr(module, function_name)
+
+        if target_function is None:
+            raise AttributeError(
+                f"'{function_name}' exists in {file_path} but is None. "
+                f"Available callables: {[n for n in dir(module) if callable(getattr(module, n)) and not n.startswith('_')]}"
+            )
+        if not callable(target_function):
+            raise AttributeError(
+                f"'{function_name}' in {file_path} is not callable (type={type(target_function).__name__}). "
+                f"Available callables: {[n for n in dir(module) if callable(getattr(module, n)) and not n.startswith('_')]}"
+            )
+
+        try:
+            sig = inspect.signature(target_function)
+            accepts_args = any(
+                p.name == "args"
+                for p in sig.parameters.values()
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                    inspect.Parameter.VAR_POSITIONAL,
+                )
+            )
+            if accepts_args:
+                return target_function(*args, **kwargs)
+            else:
+                log(f"'{function_name}' does not accept 'args', calling without")
+                return target_function()
+        except (ValueError, TypeError):
+            try:
+                return target_function(*args, **kwargs)
+            except TypeError:
+                log(f"'{function_name}' rejected args via fallback, calling without")
+                return target_function()
+
     @log_
     def __init__(self, username='root', hostname='SyhShell'):
-        self.commands = [
+        self._builtin_commands = [
             "echo", "cls", "clear", "exit",
             "time", "date", "tad", "clock",
-            "cd", "ls", "rd",
+            "cd", "ls", "rd", "rm", "rmd", "mkdir",
             "kaaedit", "pyvim",
             "touch",
             "alias", "unalias",
             "py", "tcc", "cpp", "lua", "syh",
-            "sss",  
+            "sss", "reload-configs", "logs", "execute",
+            "theme",
         ]
+
+        self._external_apps: dict[str, dict] = {}
+        self._load_external_apps()
+        self._load_bin_directory()
+
+        self.commands = self._builtin_commands + list(self._external_apps.keys())
+
         self.username = username
         self.hostname = hostname
         self.root = True
-        
-        # Оставляем чистую сессию только для работы истории (Вверх/Вниз)
+        self.theme = load_theme("default")
         self.session = PromptSession(history=InMemoryHistory())
 
-    def shell_env(self):
-        print('Welcome to the SisyphShell')
-        print(f'Version: {info.VERSION}')
-        print(f"Build: 1")
-
-        startup_path = os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
-        self.run_sss(startup_path)
-
-        while True:
-            try:
-                stat = '#' if self.root else "$"
-                cwd = os.getcwd()
-                display_cwd = cwd.replace(SyhConfig.homedir, SyhConfig.homedir_replace_char)
-                
-                # Формируем prompt с ANSI-цветами
-                prompt_text = ANSI(
-                    f"\033[1;32m{self.username}@{self.hostname}\033[0m:"
-                    f"\033[1;34m{display_cwd} \033[1;31m[{Tools.get_time()}]\033[0m {stat} "
-                )
-                
-                # Обычный ввод без completer
-                text = self.session.prompt(prompt_text).strip()
-                
-                if not text:
+    def _load_external_apps(self):
+        config_path = os.path.join(SyhConfig.ROOT_DATA, "appconfig.json")
+        if not os.path.isfile(config_path):
+            log(f"App config not found: {config_path}")
+            return
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for name, meta in data.items():
+                if not isinstance(meta, dict):
+                    log(f"Invalid app entry '{name}': expected dict")
                     continue
-                self.execute_line(text)
-                
-            except ExitShell:
-                break
-            except (KeyboardInterrupt, EOFError):
-                print()
-                break
-            except Exception as e:
-                print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+                if "command" not in meta:
+                    log(f"Invalid app entry '{name}': missing 'command' field")
+                    continue
+                key = name.strip().lower()
+                if key in self._builtin_commands:
+                    log(f"External app '{key}' shadows builtin command, skipping")
+                    continue
+                self._external_apps[key] = meta
+                log(f"Registered external app: {key}")
+        except Exception as e:
+            log(f"Failed to load appconfig.json: {e}")
+
+    def _load_bin_directory(self):
+        bin_dir = SyhConfig.ROOT_BIN
+        if not os.path.isdir(bin_dir):
+            log(f"Bin directory not found: {bin_dir}")
+            return
+        executable_extensions = {'.py', '.sh', '.bat', '.cmd', '.exe'}
+        for entry in os.listdir(bin_dir):
+            full_path = os.path.join(bin_dir, entry)
+            if not os.path.isfile(full_path):
+                continue
+            _, ext = os.path.splitext(entry)
+            is_executable = os.access(full_path, os.X_OK) or ext.lower() in executable_extensions
+            if not is_executable:
+                continue
+            key = entry.strip().lower()
+            if key in self._builtin_commands or key in self._external_apps:
+                log(f"Bin executable '{key}' already registered, skipping")
+                continue
+            self._external_apps[key] = {
+                "name": entry,
+                "command": full_path,
+                "source": "bin_directory",
+            }
+            log(f"Registered bin executable: {key}")
+
     def _expand_glob(self, args: list[str]) -> list[str]:
         expanded = []
         for arg in args:
@@ -197,10 +384,9 @@ class Shell:
             if matches:
                 expanded.extend(matches)
             else:
-                # Если маска не совпала ни с чем — оставляем как есть
-                # (чтобы rm выдал "No such file", а не молча проигнорировал)
                 expanded.append(arg)
         return expanded
+
     def _fix_slashes(self, args: list[str]) -> list[str]:
         fixed_args = []
         skip = False
@@ -291,28 +477,100 @@ class Shell:
             print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
     def run_sss(self, filename):
-        """Безопасное выполнение startup-скрипта."""
         if not os.path.exists(filename):
-            return  # Отсутствие .syhrc — это нормально, не печатаем ошибку
-
+            return
         try:
             with open(filename, "r", encoding="utf-8") as fff:
                 lines = fff.readlines()
         except Exception as e:
-            print(f"\033[1;31mError reading '{filename}': {e}\033[0m")
+            t = self.theme
+            print(f"{t.error}Error reading '{filename}': {e}{t.reset}")
             return
-
         for line_num, line in enumerate(lines, 1):
             stripped = line.strip()
-            # Пропускаем пустые строки и комментарии (Sisyph-стиль ~~)
             if not stripped or stripped.startswith("~~") or stripped.startswith("#"):
                 continue
             try:
                 self.execute_line(stripped)
             except ExitShell:
-                break  # exit в .syhrc НЕ должен убивать шелл
+                break
             except Exception as e:
-                print(f"\033[1;31m{filename}:{line_num}: {e}\033[0m")
+                t = self.theme
+                print(f"{t.error}{filename}:{line_num}: {e}{t.reset}")
+
+    def _reload_configs(self):
+        old_apps = set(self._external_apps.keys())
+        self._external_apps.clear()
+        self._load_external_apps()
+        self._load_bin_directory()
+        self.commands = self._builtin_commands + list(self._external_apps.keys())
+        new_apps = set(self._external_apps.keys())
+        added = new_apps - old_apps
+        removed = old_apps - new_apps
+        t = self.theme
+        print(f"{t.success}Configs reloaded.{t.reset}")
+        print(f"  Apps: {len(self._external_apps)} total")
+        if added:
+            print(f"  {t.success}+ Added:{t.reset} {', '.join(sorted(added))}")
+        if removed:
+            print(f"  {t.error}- Removed:{t.reset} {', '.join(sorted(removed))}")
+        if not added and not removed:
+            print(f"  No changes detected.")
+        log(f"Configs reloaded: {len(added)} added, {len(removed)} removed")
+
+    def shell_env(self):
+        t = self.theme
+        
+        # Применяем глобальный бэкграунд если установлен
+        if t.shell_bg:
+            print(f"{t.shell_bg}{t.reset}", end="")
+        
+        print(f'{t.info}Welcome to the SisyphShell{t.reset}')
+        print(f'{t.info}Version: {info.VERSION}{t.reset}')
+        print(f"{t.info}Build: 1{t.reset}")
+
+        startup_path = os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
+        self.run_sss(startup_path)
+
+        while True:
+            try:
+                t = self.theme
+                stat = t.prompt_root if self.root else t.prompt_user_sym
+                cwd = os.getcwd()
+                display_cwd = cwd.replace(SyhConfig.homedir, SyhConfig.homedir_replace_char)
+
+                # Формируем промпт с поддержкой глобального бэкграунда
+                prompt_parts = []
+                
+                if t.shell_bg:
+                    prompt_parts.append(t.shell_bg)
+                
+                # Секция user@host
+                prompt_parts.append(f"{t.prompt_user_bg}{t.prompt_user}{self.username}@{self.hostname}{t.prompt_reset}")
+                
+                # Разделитель и cwd
+                prompt_parts.append(f":{t.prompt_cwd_bg}{t.prompt_cwd}{display_cwd}{t.prompt_reset}")
+                
+                # Время
+                prompt_parts.append(f" {t.prompt_time_bg}{t.prompt_time}[{Tools.get_time()}]{t.prompt_reset}")
+                
+                # Символ и сброс
+                prompt_parts.append(f" {stat} {t.prompt_reset}")
+
+                prompt_text = ANSI("".join(prompt_parts))
+
+                text = self.session.prompt(prompt_text).strip()
+                if not text:
+                    continue
+                self.execute_line(text)
+
+            except ExitShell:
+                break
+            except (KeyboardInterrupt, EOFError):
+                print()
+                break
+            except Exception as e:
+                print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
     def execute_line(self, line: str):
         try:
@@ -325,7 +583,6 @@ class Shell:
         cmd = parts[0].lower()
         args = parts[1:]
 
-        # Разрешение алиасов
         if cmd in aliases:
             alias_value = aliases[cmd]
             try:
@@ -336,11 +593,11 @@ class Shell:
                 cmd = alias_parts[0].lower()
                 args = alias_parts[1:] + args
 
-        # ── exit ──
+        t = self.theme
+
         if cmd == "exit":
             raise ExitShell()
 
-        # ── alias / unalias ──
         elif cmd == 'alias':
             if args:
                 arg_str = ' '.join(args)
@@ -360,7 +617,6 @@ class Shell:
                     del aliases[name_lower]
             return
 
-        # ── Основные команды ──
         elif cmd == 'echo':
             print(' '.join(args))
 
@@ -382,55 +638,60 @@ class Shell:
                 try:
                     os.chdir(args[0])
                 except Exception as e:
-                    print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
-                    
+                    print(f"{t.error}cd: {e}{t.reset}")
+
         elif cmd == 'rm':
             args = self._fix_slashes(args)
-            args = self._expand_glob(args)  # ← раскрытие маски
+            args = self._expand_glob(args)
             if not args:
                 print("usage: rm <file> [file2 ...]")
             else:
                 for target in args:
                     try:
                         if os.path.isdir(target):
-                            print(f"rm: cannot remove '{target}': Is a directory (use rmd)")
+                            print(f"{t.error}rm: cannot remove '{target}': Is a directory (use rmd){t.reset}")
                         elif not os.path.exists(target):
-                            print(f"rm: cannot remove '{target}': No such file")
+                            print(f"{t.error}rm: cannot remove '{target}': No such file{t.reset}")
                         else:
                             os.remove(target)
                     except PermissionError:
-                        print(f"rm: permission denied: '{target}'")
+                        print(f"{t.error}rm: permission denied: '{target}'{t.reset}")
                     except Exception as e:
-                        print(f"rm: error removing '{target}': {e}")
+                        print(f"{t.error}rm: error removing '{target}': {e}{t.reset}")
 
         elif cmd == 'rmd':
             args = self._fix_slashes(args)
-            args = self._expand_glob(args)  # ← раскрытие маски
+            args = self._expand_glob(args)
             if not args:
                 print("usage: rmd <directory> [dir2 ...]")
             else:
                 for target in args:
                     try:
                         if not os.path.exists(target):
-                            print(f"rmd: cannot remove '{target}': No such directory")
+                            print(f"{t.error}rmd: cannot remove '{target}': No such directory{t.reset}")
                         elif not os.path.isdir(target):
-                            print(f"rmd: cannot remove '{target}': Not a directory (use rm)")
+                            print(f"{t.error}rmd: cannot remove '{target}': Not a directory (use rm){t.reset}")
                         else:
                             shutil.rmtree(target)
                     except PermissionError:
-                        print(f"rmd: permission denied: '{target}'")
+                        print(f"{t.error}rmd: permission denied: '{target}'{t.reset}")
                     except OSError as e:
-                        print(f"rmd: error removing '{target}': {e}")
+                        print(f"{t.error}rmd: error removing '{target}': {e}{t.reset}")
+
         elif cmd == "mkdir":
             args = self._fix_slashes(args)
+            if args:
+                try:
+                    os.makedirs(args[0], exist_ok=True)
+                except Exception as e:
+                    print(f"{t.error}mkdir: {e}{t.reset}")
 
-            os.makedirs(args[0], exist_ok=True)
         elif cmd == "logs":
             args = self._fix_slashes(args)
             if len(args) > 0:
                 if args[0] in ("clear", "clean"):
                     print("cleaning logs")
-                    
+
         elif cmd == 'sss':
             args = self._fix_slashes(args)
             target = args[0] if args else os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
@@ -448,7 +709,7 @@ class Shell:
                 if otp:
                     print('\n'.join(otp))
             except Exception as e:
-                print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+                print(f"{t.error}ls: {e}{t.reset}")
 
         elif cmd == 'rd':
             args = self._fix_slashes(args)
@@ -457,7 +718,7 @@ class Shell:
                     with open(args[0], 'r', encoding='utf-8') as f:
                         print(f.read())
                 except Exception as e:
-                    print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+                    print(f"{t.error}rd: {e}{t.reset}")
 
         elif cmd == 'clock':
             try:
@@ -468,12 +729,12 @@ class Shell:
                 pass
 
         elif cmd == 'kaaedit':
-            run()
+            _kaa_run()
 
         elif cmd == 'pyvim':
-            t = self._fix_slashes(args)
-            if t:
-                pyvim.open(t[0])
+            t_args = self._fix_slashes(args)
+            if t_args:
+                pyvim.open(t_args[0])
             else:
                 print("usage: pyvim <file>")
 
@@ -486,21 +747,20 @@ class Shell:
                 except FileExistsError:
                     os.utime(args[0], None)
                 except Exception as e:
-                    print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+                    print(f"{t.error}touch: {e}{t.reset}")
 
         elif cmd == 'py':
             args = self._fix_slashes(args)
-            viz_zone = {}
             if args:
                 if os.path.isfile(args[0]):
                     try:
                         with open(args[0], 'r', encoding='utf-8') as fl:
-                            a = fl.read()
-                        exec(a, viz_zone)
+                            code = fl.read()
+                        exec(code, {})
                     except Exception as e:
-                        print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+                        print(f"{t.error}py: {e}{t.reset}")
                 else:
-                    print(f"File not found: {args[0]}")
+                    print(f"{t.error}File not found: {args[0]}{t.reset}")
 
         elif cmd == 'tcc':
             args = self._fix_slashes(args)
@@ -533,7 +793,7 @@ class Shell:
                         content = ff.readlines()
                     runtime.exec_lines(content)
                 else:
-                    print(f"lua: file not found: {args[0]}")
+                    print(f"{t.error}lua: file not found: {args[0]}{t.reset}")
             else:
                 print("Usage: lua <filename.lua>")
 
@@ -546,36 +806,107 @@ class Shell:
                     traceback.print_exc()
             else:
                 print("Usage: syh <filename.syh>")
-                
+
         elif cmd == "execute":
             if not args or args[0] != "command":
                 print("Usage: execute command \"<cmd>\"")
                 return
-            
             prefix = "execute command "
             idx = line.lower().find(prefix)
             if idx == -1:
                 print("Usage: execute command \"<cmd>\"")
                 return
-            
             rest = line[idx + len(prefix):].strip()
-            
             if rest.startswith('"') and rest.endswith('"') and len(rest) >= 2:
                 com = rest[1:-1]
             elif rest.startswith("'") and rest.endswith("'") and len(rest) >= 2:
                 com = rest[1:-1]
             else:
-                com = rest 
-            
+                com = rest
             if com:
                 print(f"Executing: {com}")
             else:
                 print("execute command: empty command string")
 
+        elif cmd == 'reload-configs':
+            self._reload_configs()
+
+        elif cmd == 'theme':
+            if not args:
+                themes_dir = os.path.join(SyhConfig.ROOT_DATA, "themes")
+                available = ["default"]
+                if os.path.isdir(themes_dir):
+                    available += [
+                        os.path.splitext(f)[0]
+                        for f in os.listdir(themes_dir)
+                        if f.endswith(".json")
+                    ]
+                print(f"{t.info}Current theme: default{t.reset}")
+                print(f"{t.info}Available: {', '.join(sorted(available))}{t.reset}")
+                print(f"Usage: theme <name>")
+            else:
+                self.theme = load_theme(args[0])
+                t = self.theme
+                print(f"{t.success}Theme switched to '{args[0]}'{t.reset}")
+
+        elif cmd in self._external_apps:
+            app_meta = self._external_apps[cmd]
+            command_str = app_meta.get("command", "")
+            entry_point_name = app_meta.get("entry_point", "")
+
+            log(f"Executing external app '{cmd}': command='{command_str}', entry_point='{entry_point_name}'")
+
+            if command_str:
+                try:
+                    safe_args = ' '.join(shlex.quote(a) for a in args)
+                    full_cmd = f"{command_str} {safe_args}".strip()
+                    log(f"Running shell command: {full_cmd}")
+                    rc = os.system(full_cmd)
+                    if rc != 0:
+                        print(f"{t.warning}{cmd}: shell command exited with code {rc}, skipping entry_point{t.reset}")
+                        return
+                except Exception as e:
+                    print(f"{t.error}{cmd}: shell command failed: {e}{t.reset}")
+                    return
+
+            if entry_point_name:
+                try:
+                    if ":" in entry_point_name:
+                        file_path, func_name = entry_point_name.rsplit(":", 1)
+                    else:
+                        file_path = entry_point_name
+                        func_name = "main"
+
+                    if not file_path.endswith(".py"):
+                        file_path += ".py"
+
+                    if not os.path.isabs(file_path):
+                        candidate = os.path.join(SyhConfig.ROOT_BIN, os.path.basename(file_path))
+                        if os.path.isfile(candidate):
+                            file_path = candidate
+                        else:
+                            candidate2 = os.path.join(SyhConfig.homedir, file_path)
+                            if os.path.isfile(candidate2):
+                                file_path = candidate2
+
+                    result = self._call_function_from_file(
+                        file_path=file_path,
+                        function_name=func_name,
+                        args=args
+                    )
+                    if result is not None:
+                        print(result)
+
+                except (ImportError, AttributeError) as e:
+                    print(f"{t.error}{cmd}: loading failed: {e}{t.reset}")
+                except Exception as e:
+                    print(f"{t.error}{cmd}: entry_point execution failed:{t.reset}")
+                    print(''.join(traceback.format_exception(type(e), e, e.__traceback__)))
+
         else:
             matches = difflib.get_close_matches(cmd, self.commands, n=3, cutoff=0.6)
             suggestion = '\n'.join(matches) if matches else 'No suggestions.'
-            print(f'\033[1;31mCommand not found: \033[0m{cmd}\n\033[1;31mDid you mean:\033[0m\n{suggestion}')
+            print(f'{t.error}Command not found: {t.reset}{cmd}\n{t.error}Did you mean:{t.reset}\n{suggestion}')
 
 
 # ─── Entry point ─────────────────────────────────────────

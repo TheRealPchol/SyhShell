@@ -1,0 +1,17 @@
+{
+    "testprj": {
+        "name": "test project for SyhShell executing system",
+        "command": "",
+        "entry_point": "root/bin/testprj:main"
+    },
+    "opapapappppaaaaa": {
+        "name": "asd;asjdlkjaskldjask;ldjklas",
+        "command": "",
+        "entry_point": "root/bin/2testptj:main"
+    },
+    "atlas": {
+        "name": "The atlas package manager",
+        "command": "",
+        "entry_point": "root/bin/atlas:main"
+    }
+}

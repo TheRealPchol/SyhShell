@@ -1,0 +1,22 @@
+{
+  "prompt_user": "\033[38;5;135m",
+  "prompt_host": "\033[38;5;135m",
+  "prompt_cwd": "\033[38;5;81m",
+  "prompt_time": "\033[38;5;245m",
+  "prompt_root": "\033[38;5;196m",
+  "prompt_user_sym": "\033[38;5;110m",
+  "prompt_reset": "\033[0m",
+
+  "prompt_user_bg": "\033[48;5;236m",
+  "prompt_cwd_bg": "\033[48;5;23m",
+  "prompt_time_bg": "\033[48;5;235m",
+
+  "shell_bg": "\033[48;5;235m",
+
+  "success": "\033[38;5;118m",
+  "error": "\033[38;5;203m",
+  "warning": "\033[38;5;220m",
+  "debug": "\033[38;5;248m",
+  "info": "\033[38;5;153m",
+  "reset": "\033[0m"
+}
