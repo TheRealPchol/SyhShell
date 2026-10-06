@@ -3,6 +3,7 @@ from datetime import datetime
 import os
 import difflib
 import json
+from os.path import isfile
 import shlex
 import sys
 import time
@@ -23,7 +24,7 @@ from prompt_toolkit.history import InMemoryHistory
 from utils import pyvim
 from utils import lua
 from compilers import sisyph
-
+from compilers.js import JSRuntime
 
 # ─── Config ───────────────────────────────────────────────
 
@@ -311,7 +312,7 @@ class Shell:
             "kaaedit", "pyvim",
             "touch",
             "alias", "unalias",
-            "py", "tcc", "cpp", "lua", "syh",
+            "py", "tcc", "cpp", "lua", "syh", "qjs",
             "sss", "reload-configs", "logs", "execute",
             "theme",
         ]
@@ -806,7 +807,18 @@ class Shell:
                     traceback.print_exc()
             else:
                 print("Usage: syh <filename.syh>")
-
+        elif cmd == "qjs":
+            args = self._fix_slashes(args)
+            if args:
+                jsruntime = JSRuntime()
+                if os.path.isfile(args[0]):
+                    with open(args[0], "r", encoding="utf-8") as f:
+                        code = f.read()
+                    jsruntime.js_eval(code)
+                else:
+                    print(f"File '{args[0]}' is not found")
+            if not args:
+                print("Usage: qjs <filename.js>")
         elif cmd == "execute":
             if not args or args[0] != "command":
                 print("Usage: execute command \"<cmd>\"")
