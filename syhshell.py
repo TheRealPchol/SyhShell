@@ -13,6 +13,10 @@ import glob
 import functools
 import importlib.util
 from dataclasses import dataclass, fields
+import sqlite3
+import hashlib
+import hmac
+import getpass
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
@@ -34,11 +38,15 @@ class SyhConfig:
     ROOT: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "root")
     ROOT_BIN: str = os.path.join(ROOT, "bin")
     ROOT_DATA: str = os.path.join(ROOT, "data")
+    ROOT_HOME: str = os.path.join(ROOT, "home")
     CONFIG_FILE = os.path.join(ROOT_DATA, "config.json")
+    SYHSHELL_DB = os.path.join(ROOT_DATA, "syhshell.db")
+    
+
     def __post_init__(self):
         if self.aliases is None:
             self.aliases = {}
-
+    
 
 # ─── Themes ──────────────────────────────────────────────
 
@@ -161,10 +169,399 @@ def log_(func):
 class ExitShell(Exception):
     pass
 
+# ─── Context ─────────────────────────────────────────────
+
+class Context:
+    ROOT_PERM_LEVEL = 0
+    DEFAULT_PERM_LEVEL = 1
+    DEFAULT_GROUP = "users"
+    ADMIN_GROUP = "root"
+    MAX_AUTH_ATTEMPTS = 3
+
+    def __init__(self, conn: sqlite3.Connection | None = None) -> None:
+        db_path = SyhConfig.SYHSHELL_DB
+        db_dir = os.path.dirname(db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        self.conn = conn if conn is not None else sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        self.cursor = self.conn.cursor()
+
+        self.user_id: int | None = None
+        self.username: str | None = None
+        self.user: str | None = None
+        self.home: str | None = None
+        self.perm_level: int | None = None
+        self.groups: list[str] = []
+
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        self.conn.executescript('''
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PK,
+    username TEXT UNIQUE,
+    passwd TEXT,
+    salt TEXT,
+    home TEXT,
+    perm_level INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_id_unique ON users(id);
+CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY,
+    name TEXT UNIQUE
+);
+CREATE TABLE IF NOT EXISTS user_groups (
+    user_id INTEGER,
+    group_id INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (group_id) REFERENCES groups(id)
+);
+CREATE TABLE IF NOT EXISTS commands (
+    command TEXT PRIMARY KEY,
+    perm_type INTEGER,
+    target TEXT
+);
+CREATE TABLE IF NOT EXISTS file_perms (
+    filepath TEXT PRIMARY KEY,
+    owner_id INTEGER REFERENCES users(id) ON DELETE RESTRICT,
+    group_id INTEGER REFERENCES groups(id) ON DELETE RESTRICT,
+    mode INTEGER NOT NULL DEFAULT 644
+) WITHOUT ROWID;
+''')
+        self.conn.commit()
+
+    @staticmethod
+    def _validate_name(value: str, kind: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{kind} must be a string")
+        value = value.strip()
+        if not value:
+            raise ValueError(f"{kind} cannot be empty")
+        if value in (".", "..") or "/" in value or "\\" in value or "\x00" in value:
+            raise ValueError(f"Invalid {kind}: {value!r}")
+        return value
+
+    def _next_user_id(self) -> int:
+        row = self.cursor.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM users").fetchone()
+        return int(row[0])
+
+    def _get_user_row(self, username: str) -> sqlite3.Row | None:
+        self.cursor.execute(
+            "SELECT id, username, passwd, salt, home, perm_level FROM users WHERE username = ?",
+            (username,),
+        )
+        return self.cursor.fetchone()
+
+    def _group_id(self, name: str, create: bool = True) -> int | None:
+        self.cursor.execute("SELECT id FROM groups WHERE name = ?", (name,))
+        row = self.cursor.fetchone()
+        if row is not None:
+            return int(row["id"])
+        if not create:
+            return None
+        self.cursor.execute("INSERT INTO groups (name) VALUES (?)", (name,))
+        return int(self.cursor.lastrowid)
+
+    def _bind_user(self, row: sqlite3.Row) -> "Context":
+        self.user_id = int(row["id"]) if row["id"] is not None else None
+        self.username = row["username"]
+        self.user = self.username
+        self.home = row["home"] or os.path.join(SyhConfig.ROOT_HOME, self.username)
+        self.perm_level = (
+            int(row["perm_level"])
+            if row["perm_level"] is not None
+            else self.DEFAULT_PERM_LEVEL
+        )
+        self.groups = self.get_user_groups(self.username)
+        return self
+
+    def count_users(self) -> int:
+        return int(self.cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+    def get_usr(self, username: str) -> dict | None:
+        row = self._get_user_row(username)
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "home": row["home"],
+            "perm_level": row["perm_level"],
+            "groups": self.get_user_groups(username),
+        }
+
+    def list_users(self) -> list[dict]:
+        rows = self.cursor.execute("SELECT id, username, home, perm_level FROM users ORDER BY id").fetchall()
+        return [
+            {
+                "id": row["id"],
+                "username": row["username"],
+                "home": row["home"],
+                "perm_level": row["perm_level"],
+                "groups": self.get_user_groups(row["username"]),
+            }
+            for row in rows
+        ]
+
+    def add_usr(
+        self,
+        username: str,
+        group: str = DEFAULT_GROUP,
+        password: str | None = None,
+        *,
+        perm_level: int = DEFAULT_PERM_LEVEL,
+        home: str | None = None,
+    ) -> int:
+        username = self._validate_name(username, "username")
+        group = self._validate_name(group, "group")
+        if not password:
+            raise ValueError("Password cannot be empty")
+        if self._get_user_row(username) is not None:
+            raise ValueError(f"User already exists: {username}")
+
+        hashed_pwd, salt = Tools.hash_string(password)
+        home = home or os.path.join(SyhConfig.ROOT_HOME, username)
+        user_id = self._next_user_id()
+
+        try:
+            self.cursor.execute(
+                "INSERT INTO users (id, username, passwd, salt, home, perm_level) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, username, hashed_pwd, salt, home, perm_level),
+            )
+            group_id = self._group_id(group)
+            self.cursor.execute(
+                "INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)",
+                (user_id, group_id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+        try:
+            os.makedirs(home, exist_ok=True)
+        except OSError as e:
+            log(f"Failed to create home directory for '{username}': {e}")
+        return user_id
+
+    def del_usr(self, username: str) -> None:
+        row = self._get_user_row(username)
+        if row is None:
+            raise ValueError(f"User not found: {username}")
+        try:
+            self.cursor.execute("DELETE FROM user_groups WHERE user_id = ?", (row["id"],))
+            self.cursor.execute("DELETE FROM users WHERE id = ?", (row["id"],))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        if self.username == username:
+            self._clear_identity()
+
+    def add_group(self, name: str) -> int:
+        name = self._validate_name(name, "group")
+        group_id = self._group_id(name)
+        self.conn.commit()
+        return int(group_id)
+
+    def get_group(self, name: str) -> dict | None:
+        self.cursor.execute("SELECT id, name FROM groups WHERE name = ?", (name,))
+        row = self.cursor.fetchone()
+        return dict(row) if row is not None else None
+
+    def list_groups(self) -> list[dict]:
+        rows = self.cursor.execute("SELECT id, name FROM groups ORDER BY name").fetchall()
+        return [dict(row) for row in rows]
+
+    def del_group(self, name: str) -> None:
+        self.cursor.execute("SELECT id FROM groups WHERE name = ?", (name,))
+        row = self.cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Group not found: {name}")
+        try:
+            self.cursor.execute("DELETE FROM user_groups WHERE group_id = ?", (row["id"],))
+            self.cursor.execute("DELETE FROM groups WHERE id = ?", (row["id"],))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def add_user_to_group(self, username: str, group: str) -> None:
+        row = self._get_user_row(username)
+        if row is None:
+            raise ValueError(f"User not found: {username}")
+        group_id = self._group_id(self._validate_name(group, "group"))
+        self.cursor.execute(
+            "SELECT 1 FROM user_groups WHERE user_id = ? AND group_id = ?",
+            (row["id"], group_id),
+        )
+        if self.cursor.fetchone() is None:
+            self.cursor.execute(
+                "INSERT INTO user_groups (user_id, group_id) VALUES (?, ?)",
+                (row["id"], group_id),
+            )
+            self.conn.commit()
+        if self.username == username:
+            self.groups = self.get_user_groups(username)
+
+    def remove_user_from_group(self, username: str, group: str) -> None:
+        row = self._get_user_row(username)
+        if row is None:
+            raise ValueError(f"User not found: {username}")
+        group_id = self._group_id(group, create=False)
+        if group_id is not None:
+            self.cursor.execute(
+                "DELETE FROM user_groups WHERE user_id = ? AND group_id = ?",
+                (row["id"], group_id),
+            )
+            self.conn.commit()
+        if self.username == username:
+            self.groups = self.get_user_groups(username)
+
+    def get_user_groups(self, username: str | None = None) -> list[str]:
+        target = username or self.username
+        if not target:
+            return []
+        rows = self.cursor.execute(
+            """
+            SELECT g.name
+            FROM groups AS g
+            JOIN user_groups AS ug ON ug.group_id = g.id
+            JOIN users AS u ON u.id = ug.user_id
+            WHERE u.username = ?
+            ORDER BY g.name
+            """,
+            (target,),
+        ).fetchall()
+        return [row["name"] for row in rows]
+
+    def set_password(self, username: str, password: str) -> None:
+        row = self._get_user_row(username)
+        if row is None:
+            raise ValueError(f"User not found: {username}")
+        if not password:
+            raise ValueError("Password cannot be empty")
+        hashed_pwd, salt = Tools.hash_string(password)
+        self.cursor.execute(
+            "UPDATE users SET passwd = ?, salt = ? WHERE id = ?",
+            (hashed_pwd, salt, row["id"]),
+        )
+        self.conn.commit()
+
+    def verify_password(self, username: str, password: str) -> bool:
+        row = self._get_user_row(username)
+        if row is None or not row["passwd"] or not row["salt"]:
+            return False
+        return Tools.verify_hash(password, row["passwd"], row["salt"])
+
+    @property
+    def is_admin(self) -> bool:
+        return self.perm_level == self.ROOT_PERM_LEVEL or self.ADMIN_GROUP in self.groups
+
+    def _clear_identity(self):
+        self.user_id = None
+        self.username = None
+        self.user = None
+        self.home = None
+        self.perm_level = None
+        self.groups = []
+
+    def logout(self) -> None:
+        self._clear_identity()
+        self.close()
+
+    def close(self) -> None:
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
+            self.cursor = None
+
+    def __enter__(self) -> "Context":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def _create_first_user(self, username: str | None, password: str | None) -> "Context":
+        print("\033[1;33mNo users found. Creating the first administrator.\033[0m")
+        if username is None:
+            username = Tools._input("\033[1;36mAdministrator login [root]: \033[0m").strip() or "root"
+        username = self._validate_name(username, "username")
+
+        if password is None:
+            while True:
+                password = getpass.getpass("New password: ")
+                if not password:
+                    print("\033[1;31mPassword cannot be empty.\033[0m")
+                    continue
+                confirmation = getpass.getpass("Repeat password: ")
+                if password != confirmation:
+                    print("\033[1;31mPasswords do not match.\033[0m")
+                    continue
+                break
+        if not password:
+            raise ValueError("Password cannot be empty")
+
+        self.add_usr(
+            username,
+            self.ADMIN_GROUP,
+            password,
+            perm_level=self.ROOT_PERM_LEVEL,
+        )
+        print(f"\033[1;32mAdministrator '{username}' created.\033[0m")
+        return self._bind_user(self._get_user_row(username))
+
+    @staticmethod
+    def auth(
+        username: str | None = None,
+        password: str | None = None,
+        max_attempts: int = MAX_AUTH_ATTEMPTS,
+    ) -> "Context | None":
+        """Авторизует пользователя и возвращает Context.
+
+        Если пользователей в базе нет, создаёт первого администратора через
+        add_usr(). Недостающие логин/пароль запрашиваются интерактивно.
+        """
+        ctx = Context()
+        try:
+            if ctx.count_users() == 0:
+                return ctx._create_first_user(username, password)
+
+            interactive = username is None or password is None
+            attempts = max(1, int(max_attempts)) if interactive else 1
+            for attempt in range(1, attempts + 1):
+                current_username = username
+                if current_username is None:
+                    current_username = Tools._input("\033[1;36mLogin: \033[0m").strip()
+                current_password = password
+                if current_password is None:
+                    current_password = getpass.getpass("Password: ")
+
+                if ctx.verify_password(current_username, current_password):
+                    return ctx._bind_user(ctx._get_user_row(current_username))
+
+                if not interactive:
+                    break
+                print(f"\033[1;31mInvalid username or password ({attempt}/{attempts}).\033[0m")
+                password = None
+
+            ctx.close()
+            return None
+        except (KeyboardInterrupt, EOFError):
+            print()
+            ctx.close()
+            return None
+        except Exception:
+            ctx.close()
+            raise
 
 # ─── Tools ───────────────────────────────────────────────
 
 class Tools:
+    PBKDF2_ITERATIONS = 100000
+
     @staticmethod
     @log_
     def clear_screen():
@@ -232,6 +629,40 @@ class Tools:
         except Exception as e:
             raise Exception(e)
     
+    @staticmethod
+    @log_
+    def hash_string(text: str) -> tuple[str, str]:
+        salt_bytes = os.urandom(16)
+
+        hash_bytes = hashlib.pbkdf2_hmac(
+            hash_name="sha256",
+            password=text.encode("utf-8"),
+            salt=salt_bytes,
+            iterations=Tools.PBKDF2_ITERATIONS,
+        )
+
+        hash_str = hash_bytes.hex()
+        salt_str = salt_bytes.hex()
+
+        return (hash_str, salt_str)
+
+    @staticmethod
+    @log_
+    def verify_hash(text: str, hash_str: str, salt_str: str) -> bool:
+        try:
+            salt_bytes = bytes.fromhex(salt_str)
+        except (TypeError, ValueError):
+            return False
+
+        hash_bytes = hashlib.pbkdf2_hmac(
+            hash_name="sha256",
+            password=text.encode("utf-8"),
+            salt=salt_bytes,
+            iterations=Tools.PBKDF2_ITERATIONS,
+        )
+        return hmac.compare_digest(hash_bytes.hex(), hash_str)
+
+
 # ─── Shell ────────────────────────────────────────────────
 
 class Shell:
