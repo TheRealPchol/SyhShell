@@ -1,4 +1,12 @@
 {
     "debug_level": 1,
-    "debug_filename": "log.txt"
+    "debug_filename": "log.txt",
+    "logging": {
+        "enable": false
+    },
+    "autoexec": [
+        "fetch"
+    ]
 }
+
+

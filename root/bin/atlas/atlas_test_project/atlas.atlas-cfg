@@ -1,0 +1,14 @@
+name=atlasTest;
+
+description=The test project for atlas package manager;
+
+path=$WORKDIR/main.py:main;
+
+author=SisyphProject;
+
+command=testatlas;
+
+version=1.0;
+
+cont=TheRealPchol;
+cont=SisyphProject;

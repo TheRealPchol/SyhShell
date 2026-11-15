@@ -1,6 +1,9 @@
 {
-    "atlas-network": {
-        "package-server": "127.0.0.1:54321"
+    "atlas-server": {
+        "package-server": "127.0.0.1:53002",
+        "passwordStatus": true,
+        "password": "StandartAtlasServerPassword"
+
     },
     "atlas-config": {}
 

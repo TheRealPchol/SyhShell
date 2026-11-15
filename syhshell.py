@@ -1,15 +1,12 @@
-import argparse
 from datetime import datetime
 import os
 import difflib
 import json
-from os.path import isfile
 import shlex
 import sys
 import time
 import traceback
 import inspect
-import subprocess
 import gzip
 import shutil
 import glob
@@ -32,12 +29,12 @@ from compilers.js import JSRuntime
 class SyhConfig:
     homedir: str = os.path.dirname(os.path.abspath(__file__))
     aliases: dict[str, str] | None = None
-    homedir_replace_char: str = "~/"
-    startup_script: str = ".syhrc"
+    homedir_replace_char: str = "~"
+    startup_script: str = f"{homedir}.syhrc"
     ROOT: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "root")
     ROOT_BIN: str = os.path.join(ROOT, "bin")
     ROOT_DATA: str = os.path.join(ROOT, "data")
-
+    CONFIG_FILE = os.path.join(ROOT_DATA, "config.json")
     def __post_init__(self):
         if self.aliases is None:
             self.aliases = {}
@@ -73,6 +70,7 @@ class Theme:
     debug: str = "\033[1;38m"
     info: str = "\033[1;37m"
     reset: str = "\033[0m"
+    chtoto: str = "\033[36m"
 
     @classmethod
     def default(cls) -> "Theme":
@@ -122,8 +120,8 @@ aliases = {"cls": "clear"}
 
 
 class info:
-    VERSION = "ss26.09.1"
-
+    VERSION = "ss26.10.1"
+    BUILD = 3
 
 # ─── Logging ─────────────────────────────────────────────
 
@@ -135,11 +133,12 @@ def log(log_text, config_filename: str = 'config.json'):
                 config = json.load(fl)
         except Exception:
             config = {}
-        if config.get("debug_level", 0) > 0:
-            with open("latest.log", 'a+') as fi:
-                fi.write(f'\n[{str(datetime.now()).split(".")[0]}] {log_text}')
-        if config.get('debug_level', 0) > 1:
-            print(f'\033[1;38m[DEBUG] [{str(datetime.now()).split(".")[0]}] {log_text}\033[0m ')
+        if config.get("logging", {}).get("enable"):
+            if config.get("debug_level", 0) > 0:
+                with open("latest.log", 'a+') as fi:
+                    fi.write(f'\n[{str(datetime.now()).split(".")[0]}] {log_text}')
+            if config.get('debug_level', 0) > 1:
+                print(f'\033[1;38m[DEBUG] [{str(datetime.now()).split(".")[0]}] {log_text}\033[0m ')
 
 
 def log_(func):
@@ -204,7 +203,7 @@ class Tools:
 
     @staticmethod
     @log_
-    def theme_print(text: str, theme: Theme = None, style: str = ""):
+    def theme_print(text: str, theme: Theme | None = None, style: str = ""):
         """Выводит текст с учётом темы и стиля.
         
         Args:
@@ -232,12 +231,11 @@ class Tools:
             os.remove(source_file)
         except Exception as e:
             raise Exception(e)
-
-
+    
 # ─── Shell ────────────────────────────────────────────────
 
 class Shell:
-
+    _self = None
     @staticmethod
     @log_
     def _call_function_from_file(file_path, function_name, *args, **kwargs):
@@ -314,7 +312,7 @@ class Shell:
             "alias", "unalias",
             "py", "tcc", "cpp", "lua", "syh", "qjs",
             "sss", "reload-configs", "logs", "execute",
-            "theme",
+            "theme", "fetch",
         ]
 
         self._external_apps: dict[str, dict] = {}
@@ -328,7 +326,9 @@ class Shell:
         self.root = True
         self.theme = load_theme("default")
         self.session = PromptSession(history=InMemoryHistory())
-
+        Shell._self = self
+    def get_self(self):
+        return self
     def _load_external_apps(self):
         config_path = os.path.join(SyhConfig.ROOT_DATA, "appconfig.json")
         if not os.path.isfile(config_path):
@@ -516,8 +516,23 @@ class Shell:
         if removed:
             print(f"  {t.error}- Removed:{t.reset} {', '.join(sorted(removed))}")
         if not added and not removed:
-            print(f"  No changes detected.")
+            print("  No changes detected.")
         log(f"Configs reloaded: {len(added)} added, {len(removed)} removed")
+
+    @log_
+    def fetch(self):
+        t = self.theme
+        output = [
+            "",
+            f"{t.chtoto}                                  {t.reset}SisyphShell fetch",
+            "",
+            f"{t.chtoto}▄▀▀▀ ▄  ▄ █▄▄  ▄▀▀▀ █▄▄   ▄▄  █ █ {t.reset} Sisyph shell version: {info.VERSION}",
+            f"{t.chtoto} ▀▀▄ █  █ █  █  ▀▀▄ █  █ █▀▀▀ █ █ {t.reset} Sisyph shell build: {info.BUILD}",
+            f"{t.chtoto}▀▀▀   ▀▀█ ▀  ▀ ▀▀▀  ▀  ▀  ▀▀▀ ▀ ▀ {t.reset} Commands count: {len(self.commands)}",
+            f"{t.chtoto}      ▀▀                          {t.reset} {self.username}@{self.hostname}",
+            f"{t.chtoto}                                  {t.reset} Current dir: {os.getcwd()}",
+        ]
+        print("\n".join(output))
 
     def shell_env(self):
         t = self.theme
@@ -528,7 +543,7 @@ class Shell:
         
         print(f'{t.info}Welcome to the SisyphShell{t.reset}')
         print(f'{t.info}Version: {info.VERSION}{t.reset}')
-        print(f"{t.info}Build: 1{t.reset}")
+        print(f"{t.info}Build: {info.BUILD}{t.reset}")
 
         startup_path = os.path.join(SyhConfig.homedir, SyhConfig.startup_script)
         self.run_sss(startup_path)
@@ -632,7 +647,8 @@ class Shell:
 
         elif cmd == 'tad':
             print(Tools.get_time_and_date())
-
+        elif cmd == 'fetch':
+            self.fetch()
         elif cmd == 'cd':
             args = self._fix_slashes(args)
             if args:
@@ -803,7 +819,7 @@ class Shell:
             if len(args) > 0:
                 try:
                     sisyph.execute_file(args[0])
-                except Exception as e:
+                except Exception:
                     traceback.print_exc()
             else:
                 print("Usage: syh <filename.syh>")
@@ -855,7 +871,7 @@ class Shell:
                     ]
                 print(f"{t.info}Current theme: default{t.reset}")
                 print(f"{t.info}Available: {', '.join(sorted(available))}{t.reset}")
-                print(f"Usage: theme <name>")
+                print("Usage: theme <name>")
             else:
                 self.theme = load_theme(args[0])
                 t = self.theme
@@ -934,6 +950,14 @@ if __name__ == "__main__":
             pass
     try:
         Tools.clear_screen()
+        try:
+            from root.bin import syhapi
+            syhapi.Shell = Shell
+            syhapi.Tools = Tolls
+            syhapi.info = info
+            syhapi.SyhConfig = SyhConfig
+        except:
+            pass
         shel = Shell()
         shel.shell_env()
     finally:
