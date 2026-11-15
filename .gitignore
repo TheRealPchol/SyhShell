@@ -1,0 +1,12 @@
+*.gz
+*.log
+dist/
+*.pyc
+__pycache__/
+dist/*
+build/
+build/*
+builds/*
+env/
+env/*
+
