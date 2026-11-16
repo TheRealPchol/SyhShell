@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-cd "$(dirname "$0")" || exit 1
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT" || exit 1
 
-VERSION="GoSS tools version 1"
-GOSS_VERSION=$(cat ./data/version)
+VERSION="2.1"
+GOSS_VERSION=$(cat ./root/data/version)
 BUILDS_DIR=./builds/
 
 COLOR_RED="\033[31m"
@@ -23,6 +24,7 @@ build() {
     ret=$?
     if [ $ret -eq 0 ]; then
         ok "Build completed successfully"
+        exit 0
     else
         err "Build exited with error. Code: $ret"
         exit $ret
@@ -34,10 +36,13 @@ build() {
 
 run(){
     go run .
+    exit $?
 }
 
 version(){
-    echo "$VERSION"
+    echo "GoSS tools version $VERSION"
+    echo "GoSS version: $GOSS_VERSION"
+    echo
 }
 
 case "$1" in
@@ -45,10 +50,12 @@ case "$1" in
         "$1" "$2" "$3" "$4"
         ;;
     "")
+        version
         echo "usage: $0 {run|build|version}"
         exit 1
         ;;
     *)
+        version
         err "unknown command: $1"
         echo "usage: $0 {run|build|version}"
         exit 1

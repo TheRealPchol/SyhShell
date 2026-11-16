@@ -2,13 +2,10 @@ package main
 
 import (
 	"fmt"
-	"goss/tools"
+	"goss/cli"
 )
 
 func main() {
 	fmt.Println("Hello, Go SisyphShell")
-
-	test := []string{"Hello", "World\\", "!"}
-	s := tools.FixSlashes(test)
-	fmt.Println(s)
+	cli.Cli()
 }

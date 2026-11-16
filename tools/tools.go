@@ -25,17 +25,47 @@ func ClearConsole() error {
 	return cmd.Run()
 }
 
-// FixSlashes убирает завершающий обратный слеш у элементов среза.
+// FixSlashes склеивает элементы среза: если элемент оканчивается на "\",
+// он считается продолжением и объединяется со следующим через пробел.
+//
+//	{"Hello", "World\\", "!"} -> {"Hello", "World !"}
+//	{"a\\", "b\\", "c"}       -> {"a b c"}
+//	{"a\\"}                   -> {"a"}
 func FixSlashes(obj []string) []string {
 	result := []string{}
+	current := ""
+	building := false
 
 	for _, o := range obj {
-		if strings.HasSuffix(o, "\\") {
-			result = append(result, strings.TrimSuffix(o, "\\"))
+		continues := strings.HasSuffix(o, "\\")
+		piece := strings.TrimSuffix(o, "\\")
+
+		if building {
+			current += " " + piece
 		} else {
-			result = append(result, o)
+			current = piece
 		}
+
+		if continues {
+			building = true
+			continue
+		}
+
+		result = append(result, current)
+		building = false
+	}
+
+	// Последний элемент оканчивался на "\", склеивать больше не с чем —
+	// отдаём накопленное как есть, без висящего слеша.
+	if building {
+		result = append(result, current)
 	}
 
 	return result
+}
+
+func UpdateString(target *string, newValue string) {
+	if target != nil { // Проверка на nil, чтобы избежать паники
+		*target = newValue
+	}
 }
