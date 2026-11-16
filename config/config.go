@@ -12,3 +12,12 @@ var ExitPhrases = []string{
 	"--bye",
 	"-b",
 }
+
+
+
+var BuildInCommands = []string{
+	"cd",
+	"alias",
+	"export",
+	"pwd",
+}
