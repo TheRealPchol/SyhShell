@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
-
+	"fmt"
 	"goss/config"
 	"goss/tools"
 )
@@ -20,13 +20,15 @@ func ExecuteCommand(command string) error {
 		switch parts[0] {
 		case "cd":
 			if len(parts) < 2 {
-				homeDir, err := os.UserHomeDir()
-				if err != nil {
-					return err
-				}
+				homeDir := config.Homed
+				
 				return os.Chdir(homeDir)
 			}
 			return os.Chdir(parts[1])
+		case "pwd":
+			dir, _ := os.Getwd()
+			fmt.Println(dir)
+			return nil
 		}
 		return nil
 	} else {
