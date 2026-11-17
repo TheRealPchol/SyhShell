@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/user"
 )
 var Prompt string = "\033[1;32m[$USER@$HOST]\033[0m \033[1;34m$DIR\033[0m: " 
 
@@ -28,3 +29,6 @@ var BuildInCommands = []string{
 
 var Homed, _ = os.UserHomeDir()
 var Home_syb = "~"
+
+var Hostname, _= os.Hostname()
+var Username, _ = user.Current()
