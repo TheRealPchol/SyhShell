@@ -1,24 +1,25 @@
 package tools
 
 import (
-	"bufio"
-	"fmt"
-	"os"
-	"strings"
+	"github.com/chzyer/readline"
 )
 
-// reader создаётся один раз: если делать bufio.NewReader(os.Stdin) при каждом
-// вызове, он читает stdin с запасом и при следующем вызове выбросит остаток
-// буфера — вставленный из буфера обмена многострочный текст потеряется.
-var reader = bufio.NewReader(os.Stdin)
-
 func Input(prompt string) (string, error) {
-	fmt.Print(prompt)
-
-	result, err := reader.ReadString('\n')
+	rl, err := readline.New(prompt)
 	if err != nil {
 		return "", err
 	}
+	defer rl.Close()
 
-	return strings.TrimSpace(result), nil
+	for {
+		line, err := rl.Readline()
+		if err != nil {
+			if err == readline.ErrInterrupt {
+				continue
+			}
+			return "", err
+		}
+		return line, nil
+	}
 }
+

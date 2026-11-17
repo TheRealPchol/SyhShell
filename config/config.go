@@ -1,6 +1,9 @@
 package config
 
-const Prompt string = "[$USER@$HOST]: "
+import (
+	"os"
+)
+var Prompt string = "\033[1;32m[$USER@$HOST]\033[0m \033[1;34m$DIR\033[0m: " 
 
 var ExitPhrases = []string{
 	".exit",
@@ -11,6 +14,7 @@ var ExitPhrases = []string{
 	"--quit",
 	"--bye",
 	"-b",
+	".bye",
 }
 
 
@@ -21,3 +25,6 @@ var BuildInCommands = []string{
 	"export",
 	"pwd",
 }
+
+var Homed, _ = os.UserHomeDir()
+var Home_syb = "~"
